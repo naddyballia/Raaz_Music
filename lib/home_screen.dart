@@ -12,8 +12,8 @@ import 'package:raaz/services/audio_player_service.dart'; // Corrected Import Au
 const Color themeBackgroundColor = Color(0xFFFFF0F0);
 const Color themeAccentColor = Color(0xFFE91E63);
 
-// Enum for Sort Order
-enum SortOrder { alphabetical, recent }
+// Enum for View Type
+enum ViewType { alphabetical, recent, favorites }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -31,8 +31,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
-  // State for sorting
-  SortOrder _currentSortOrder = SortOrder.alphabetical;
+  // State for view type
+  ViewType _currentViewType = ViewType.alphabetical;
+  List<Song> _favoriteSongs = []; // State for favorite songs
 
   List<Song> _songs = [];
   bool _isScanning = false;
@@ -42,7 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSongsFromDb();
+    _checkPermissionAndLoadInitialSongs(); // Changed initial loading logic
     // Listener for search query changes
     _searchController.addListener(() {
       if (mounted) {
@@ -53,6 +54,40 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     });
   }
+
+  // --- New method for initial permission check and loading ---
+  Future<void> _checkPermissionAndLoadInitialSongs() async {
+    // 1. Load existing songs from DB first
+    await _loadSongsFromDb();
+
+    // 2. Check permission status
+    PermissionStatus status = await Permission.audio.status;
+
+    if (status.isGranted) {
+      // 3. If permission granted AND DB was empty, trigger a scan
+      if (_songs.isEmpty && mounted) {
+        print(
+            "[Home Screen] Permission granted, DB empty. Triggering initial scan.");
+        await _scanMusicAndSave(); // Use the existing scan method
+      } else {
+        print(
+            "[Home Screen] Permission granted, songs loaded from DB or already scanned.");
+      }
+    } else {
+      // 4. If permission not granted, maybe request it here or wait for user action
+      // For now, we'll rely on the manual refresh button to request.
+      // You could uncomment the line below to request immediately on startup if denied/undetermined.
+      // await _requestPermissionAndScan();
+      print("[Home Screen] Audio permission not granted yet.");
+      // Ensure UI shows the 'no files' message correctly if DB is empty and no permission
+      if (_songs.isEmpty && mounted) {
+        setState(() {
+          _isLoadingFromDb = false; // Stop loading indicator
+        });
+      }
+    }
+  }
+  // --- End New Method ---
 
   @override
   void dispose() {
@@ -87,10 +122,47 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  // --- Method to load favorite songs ---
+  Future<void> _loadFavoriteSongs() async {
+    if (!mounted) return;
+    print("[Home Screen] Loading favorite songs from database...");
+    try {
+      final favSongs = await _dbService.getFavoriteSongs();
+      if (!mounted) return;
+      setState(() {
+        _favoriteSongs = favSongs;
+        print("[Home Screen] Loaded ${_favoriteSongs.length} favorite songs.");
+      });
+    } catch (e) {
+      print("[Home Screen] Error loading favorite songs from DB: $e");
+      // Optionally show an error message
+    }
+  }
+  // --- End Method ---
+
   Future<void> _requestPermissionAndScan() async {
     if (_isScanning) return;
-    PermissionStatus status = await Permission.audio.request();
+
+    // Decide which permission to request based on potential Android version (simplified check)
+    // A more robust check might involve device_info_plus package
+    bool requestManageStorage = true; // Assume we might need it
+    PermissionStatus status;
+
+    if (requestManageStorage) {
+      print("[Home Screen] Requesting Manage External Storage permission...");
+      status = await Permission.manageExternalStorage.request();
+      if (!status.isGranted) {
+        print(
+            "[Home Screen] Manage External Storage denied. Falling back to Audio permission...");
+        status = await Permission.audio.request(); // Fallback request
+      }
+    } else {
+      print("[Home Screen] Requesting Audio permission...");
+      status = await Permission.audio.request();
+    }
+
     if (status.isGranted) {
+      print("[Home Screen] Permission granted. Starting scan...");
       _scanMusicAndSave();
     } else if (status.isPermanentlyDenied) {
       _showSnackBar(context, 'Permission permanently denied. Open settings.');
@@ -101,12 +173,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _scanMusicAndSave() async {
+    // Permission is already checked in _requestPermissionAndScan before calling this
     if (_isScanning) return;
-    PermissionStatus status = await Permission.audio.status;
-    if (!status.isGranted) {
-      _showSnackBar(context, 'Permission denied. Cannot scan.');
-      return;
-    }
+
     setState(() {
       _isScanning = true;
     });
@@ -153,14 +222,64 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // --- Method to toggle favorite status ---
+  Future<void> _toggleFavorite(Song song) async {
+    // Toggle in DB
+    await _dbService.toggleFavorite(song);
+
+    // Update local state immediately for responsiveness
+    final songId = song.id;
+    final mainIndex = _songs.indexWhere((s) => s.id == songId);
+    final favIndex = _favoriteSongs.indexWhere((s) => s.id == songId);
+
+    if (!mounted) return; // Check mounted status before setState
+
+    setState(() {
+      // Update the main list
+      if (mainIndex != -1) {
+        _songs[mainIndex].isFavorite = !_songs[mainIndex].isFavorite;
+      }
+
+      // Update the favorites list (add or remove)
+      if (song.isFavorite) {
+        // If it was just favorited (status is now true), add if not present
+        if (favIndex == -1) {
+          _favoriteSongs.add(song);
+          // Optional: Re-sort favorites if needed, e.g., by title
+          _favoriteSongs.sort((a, b) => a.displayTitle
+              .toLowerCase()
+              .compareTo(b.displayTitle.toLowerCase()));
+        }
+      } else {
+        // If it was just unfavorited (status is now false), remove if present
+        if (favIndex != -1) {
+          _favoriteSongs.removeAt(favIndex);
+        }
+      }
+    });
+
+    _showSnackBar(context,
+        '${song.displayTitle} ${song.isFavorite ? "added to" : "removed from"} favorites');
+  }
+  // --- End Method ---
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       extendBody: true, // Allow body to draw behind bottom bar
       appBar: AppBar(
-        title: Expanded(child: _buildSearchField()), // Expanded search field
+        title: _buildSearchField(), // Removed Expanded widget
         toolbarHeight: 80,
-        // No actions needed per target UI
+        actions: [
+          // Add actions for the refresh button
+          IconButton(
+            icon: Icon(Icons.refresh, color: Colors.grey[700]),
+            tooltip: 'Scan for music',
+            onPressed:
+                _requestPermissionAndScan, // Call the permission/scan method
+          ),
+          const SizedBox(width: 10), // Add some spacing
+        ],
       ),
       body: Column(
         children: [
@@ -172,9 +291,11 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                _currentSortOrder == SortOrder.recent
+                _currentViewType == ViewType.recent
                     ? 'Recently Played'
-                    : 'Play The Songs..',
+                    : (_currentViewType == ViewType.favorites
+                        ? 'Favorite Songs'
+                        : 'All Songs'), // Updated Title Logic
                 style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w600,
@@ -196,11 +317,18 @@ class _HomeScreenState extends State<HomeScreen> {
                 } else if (_songs.isEmpty) {
                   return _buildEmptyListMessage();
                 } else {
-                  // --- Apply Sorting ---
-                  List<Song> sortedSongs =
-                      List.from(_songs); // Create a modifiable copy
-                  if (_currentSortOrder == SortOrder.recent) {
-                    sortedSongs.sort((a, b) {
+                  // --- Determine List to Display ---
+                  List<Song> songsToDisplay;
+                  if (_currentViewType == ViewType.favorites) {
+                    songsToDisplay =
+                        List.from(_favoriteSongs); // Use favorites list
+                  } else {
+                    songsToDisplay = List.from(_songs); // Use all songs list
+                  }
+
+                  // --- Apply Sorting (only if not favorites view) ---
+                  if (_currentViewType == ViewType.recent) {
+                    songsToDisplay.sort((a, b) {
                       // Sort descending: songs without lastPlayed go to the end
                       if (a.lastPlayed == null && b.lastPlayed == null)
                         return 0;
@@ -208,16 +336,16 @@ class _HomeScreenState extends State<HomeScreen> {
                       if (b.lastPlayed == null) return -1;
                       return b.lastPlayed!.compareTo(a.lastPlayed!);
                     });
-                  } else {
-                    // Default to alphabetical
-                    sortedSongs.sort((a, b) => a.displayTitle
+                  } else if (_currentViewType == ViewType.alphabetical) {
+                    // Default to alphabetical for the 'All Songs' view
+                    songsToDisplay.sort((a, b) => a.displayTitle
                         .toLowerCase()
                         .compareTo(b.displayTitle.toLowerCase()));
                   }
-                  // --- End Sorting ---
+                  // Favorites are already sorted by title from the DB query
 
-                  // Filter sorted songs based on search query
-                  final filteredSongs = sortedSongs.where((song) {
+                  // --- Filter the determined list based on search query ---
+                  final filteredSongs = songsToDisplay.where((song) {
                     final query = _searchQuery.toLowerCase();
                     final title = song.displayTitle.toLowerCase();
                     final artist = song.displayArtist.toLowerCase();
@@ -290,22 +418,39 @@ class _HomeScreenState extends State<HomeScreen> {
             CrossAxisAlignment.center, // Center items vertically
         children: [
           // New Order: Home, Recent, Favorite, Download
-          _buildIconColumn(Icons.home_outlined, 'Home', () {
-            // Set sort order to alphabetical
+          _buildIconColumn(
+              _currentViewType == ViewType.alphabetical
+                  ? Icons.home // Filled if active
+                  : Icons.home_outlined,
+              'Home', () {
+            // Set view type to alphabetical
             setState(() {
-              _currentSortOrder = SortOrder.alphabetical;
+              _currentViewType = ViewType.alphabetical;
             });
-            _showSnackBar(context, 'Sorted alphabetically');
+            _showSnackBar(context, 'Showing all songs');
           }),
-          _buildIconColumn(Icons.history, 'Recent', () {
-            // Set sort order to recent
+          _buildIconColumn(
+              _currentViewType == ViewType.recent
+                  ? Icons.history_toggle_off // Different active icon maybe?
+                  : Icons.history,
+              'Recent', () {
+            // Set view type to recent
             setState(() {
-              _currentSortOrder = SortOrder.recent;
+              _currentViewType = ViewType.recent;
             });
-            _showSnackBar(context, 'Sorted by recently played');
+            _showSnackBar(context, 'Showing recently played');
           }),
-          _buildIconColumn(Icons.favorite_border, 'Favorite', () {
-            _showSnackBar(context, 'Favorite feature coming soon!');
+          _buildIconColumn(
+              _currentViewType == ViewType.favorites
+                  ? Icons.favorite // Filled if active
+                  : Icons.favorite_border,
+              'Favorite', () {
+            // Set view type to favorites and load them
+            setState(() {
+              _currentViewType = ViewType.favorites;
+            });
+            _loadFavoriteSongs(); // Load favorites when tab is selected
+            _showSnackBar(context, 'Showing favorite songs');
           }),
           _buildIconColumn(Icons.download_outlined, 'Download', () {
             _showSnackBar(context, 'Download feature coming soon!');
@@ -361,44 +506,93 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.only(bottom: 100),
       itemCount: songsToDisplay.length, // Use filtered list length
       itemBuilder: (context, index) {
-        final song = songsToDisplay[index]; // Use song from filtered list
+        final song = songsToDisplay[index];
         bool isSelected = currentPlayingSongId == song.id;
 
-        return ListTile(
-          leading: Icon(
-            Icons.music_note,
-            color: isSelected ? themeAccentColor : Colors.grey[600],
-            size: 26,
-          ),
-          title: Text(
-            song.displayTitle,
-            style: TextStyle(
-              fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-              fontSize: 15,
-              color: isSelected ? themeAccentColor : Colors.black87,
+        // Use ListTile directly without Card, add padding
+        return Padding(
+          padding: const EdgeInsets.symmetric(
+              horizontal: 8.0, vertical: 4.0), // Replicate Card margin
+          child: ListTile(
+            tileColor:
+                Colors.transparent, // Keep ListTile background transparent
+            selectedTileColor: themeAccentColor
+                .withOpacity(0.1), // Optional: subtle selected background
+            shape: RoundedRectangleBorder(
+              // Add back the shape for the outline
+              borderRadius: BorderRadius.circular(10.0),
+              side: BorderSide(
+                // Define the outline border
+                color: isSelected
+                    ? themeAccentColor
+                        .withOpacity(0.6) // More visible selected border
+                    : Colors.grey.shade300
+                        .withOpacity(0.4), // Lighter default border
+                width: 1.0, // Slightly thicker border for visibility
+              ),
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          subtitle: Text(
-            song.displayArtist,
-            style: const TextStyle(color: Colors.black54, fontSize: 13),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          trailing: IconButton(
-            icon: const Icon(Icons.more_vert, color: Colors.black54),
-            onPressed: () {
-              _showSnackBar(context, 'Options for ${song.displayTitle}');
-              // TODO: Show options menu (add to playlist, etc.)
+            selected: isSelected,
+            leading: Icon(
+              Icons.music_note,
+              color: isSelected ? themeAccentColor : Colors.grey[600],
+              size: 26,
+            ),
+            title: Text(
+              song.displayTitle,
+              style: TextStyle(
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                fontSize: 15,
+                color: isSelected ? themeAccentColor : Colors.black87,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: Text(
+              song.displayArtist,
+              style: const TextStyle(color: Colors.black54, fontSize: 13),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min, // Keep Row small
+              children: [
+                IconButton(
+                  // Updated favorite icon logic
+                  icon: Icon(
+                    song.isFavorite ? Icons.favorite : Icons.favorite_border,
+                    color:
+                        song.isFavorite ? themeAccentColor : Colors.grey[400],
+                  ),
+                  iconSize: 22,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  tooltip: song.isFavorite
+                      ? 'Remove from favorites'
+                      : 'Mark as favorite',
+                  onPressed: () {
+                    // Call the toggle method
+                    _toggleFavorite(song);
+                  },
+                ),
+                // Keep the original More Options button
+                IconButton(
+                  icon: const Icon(Icons.more_vert, color: Colors.black54),
+                  tooltip: 'More options',
+                  onPressed: () {
+                    _showSnackBar(context, 'Options for ${song.displayTitle}');
+                    // TODO: Show options menu
+                  },
+                ),
+              ],
+            ),
+            onTap: () {
+              // Pass the currently displayed list to the player service
+              final listToPlay = (_currentViewType == ViewType.favorites)
+                  ? _favoriteSongs
+                  : _songs;
+              _audioService.setPlaylist(listToPlay, song);
             },
           ),
-          onTap: () {
-            // Pass the ORIGINAL unfiltered list to setPlaylist
-            _audioService.setPlaylist(_songs, song);
-          },
-          selected: isSelected,
-          selectedTileColor: themeAccentColor.withOpacity(0.05),
         );
       },
     );
@@ -409,25 +603,24 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Padding(
         padding: const EdgeInsets.all(20.0),
         child: Column(
-          mainAxisSize:
-              MainAxisSize.min, // Important for Column in Center/Expanded
-          children: [
-            Icon(Icons.music_off_outlined, size: 60, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            Text(
-              _isScanning ? 'Scanning...' : 'No music files found.',
-              style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            if (!_isScanning && !_isLoadingFromDb && _songs.isEmpty)
+            mainAxisSize:
+                MainAxisSize.min, // Important for Column in Center/Expanded
+            children: [
+              Icon(Icons.music_off_outlined, size: 60, color: Colors.grey[400]),
+              const SizedBox(height: 16),
               Text(
-                'Tap the refresh icon to scan your device for music.',
-                style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+                _isScanning ? 'Scanning...' : 'No music files found.',
+                style: TextStyle(fontSize: 16, color: Colors.grey[600]),
                 textAlign: TextAlign.center,
               ),
-          ],
-        ),
+              const SizedBox(height: 8),
+              if (!_isScanning && !_isLoadingFromDb && _songs.isEmpty)
+                Text(
+                  'Tap the refresh icon to scan your device for music.',
+                  style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+                  textAlign: TextAlign.center,
+                ),
+            ]),
       ),
     );
   }

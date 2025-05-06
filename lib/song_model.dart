@@ -23,6 +23,9 @@ class Song {
   @Index() // Index for sorting by recently played
   DateTime? lastPlayed; // Track when the song was last played
 
+  @Index() // Index for filtering favorites
+  bool isFavorite = false; // Track favorite status
+
   // We might add: artwork (as bytes or path), track number, year etc. later
 
   // Default constructor (needed by Isar)
@@ -35,6 +38,7 @@ class Song {
     this.durationMs,
     this.genre,
     this.lastPlayed, // Add to constructor (optional, can be updated later)
+    this.isFavorite = false, // Default to false
   });
 
   // You could add helper methods here later, e.g., formattedDuration

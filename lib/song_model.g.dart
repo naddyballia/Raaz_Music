@@ -57,13 +57,18 @@ const SongSchema = CollectionSchema(
       name: r'genre',
       type: IsarType.string,
     ),
-    r'lastPlayed': PropertySchema(
+    r'isFavorite': PropertySchema(
       id: 8,
+      name: r'isFavorite',
+      type: IsarType.bool,
+    ),
+    r'lastPlayed': PropertySchema(
+      id: 9,
       name: r'lastPlayed',
       type: IsarType.dateTime,
     ),
     r'title': PropertySchema(
-      id: 9,
+      id: 10,
       name: r'title',
       type: IsarType.string,
     )
@@ -95,6 +100,19 @@ const SongSchema = CollectionSchema(
       properties: [
         IndexPropertySchema(
           name: r'lastPlayed',
+          type: IndexType.value,
+          caseSensitive: false,
+        )
+      ],
+    ),
+    r'isFavorite': IndexSchema(
+      id: 5742774614603939776,
+      name: r'isFavorite',
+      unique: false,
+      replace: false,
+      properties: [
+        IndexPropertySchema(
+          name: r'isFavorite',
           type: IndexType.value,
           caseSensitive: false,
         )
@@ -165,8 +183,9 @@ void _songSerialize(
   writer.writeLong(offsets[5], object.durationMs);
   writer.writeString(offsets[6], object.filePath);
   writer.writeString(offsets[7], object.genre);
-  writer.writeDateTime(offsets[8], object.lastPlayed);
-  writer.writeString(offsets[9], object.title);
+  writer.writeBool(offsets[8], object.isFavorite);
+  writer.writeDateTime(offsets[9], object.lastPlayed);
+  writer.writeString(offsets[10], object.title);
 }
 
 Song _songDeserialize(
@@ -182,8 +201,9 @@ Song _songDeserialize(
     durationMs: reader.readLongOrNull(offsets[5]),
     filePath: reader.readString(offsets[6]),
     genre: reader.readStringOrNull(offsets[7]),
-    lastPlayed: reader.readDateTimeOrNull(offsets[8]),
-    title: reader.readStringOrNull(offsets[9]),
+    isFavorite: reader.readBoolOrNull(offsets[8]) ?? false,
+    lastPlayed: reader.readDateTimeOrNull(offsets[9]),
+    title: reader.readStringOrNull(offsets[10]),
   );
   object.id = id;
   return object;
@@ -213,8 +233,10 @@ P _songDeserializeProp<P>(
     case 7:
       return (reader.readStringOrNull(offset)) as P;
     case 8:
-      return (reader.readDateTimeOrNull(offset)) as P;
+      return (reader.readBoolOrNull(offset) ?? false) as P;
     case 9:
+      return (reader.readDateTimeOrNull(offset)) as P;
+    case 10:
       return (reader.readStringOrNull(offset)) as P;
     default:
       throw IsarError('Unknown property with id $propertyId');
@@ -298,6 +320,14 @@ extension SongQueryWhereSort on QueryBuilder<Song, Song, QWhere> {
     return QueryBuilder.apply(this, (query) {
       return query.addWhereClause(
         const IndexWhereClause.any(indexName: r'lastPlayed'),
+      );
+    });
+  }
+
+  QueryBuilder<Song, Song, QAfterWhere> anyIsFavorite() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(
+        const IndexWhereClause.any(indexName: r'isFavorite'),
       );
     });
   }
@@ -520,6 +550,51 @@ extension SongQueryWhere on QueryBuilder<Song, Song, QWhereClause> {
         upper: [upperLastPlayed],
         includeUpper: includeUpper,
       ));
+    });
+  }
+
+  QueryBuilder<Song, Song, QAfterWhereClause> isFavoriteEqualTo(
+      bool isFavorite) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addWhereClause(IndexWhereClause.equalTo(
+        indexName: r'isFavorite',
+        value: [isFavorite],
+      ));
+    });
+  }
+
+  QueryBuilder<Song, Song, QAfterWhereClause> isFavoriteNotEqualTo(
+      bool isFavorite) {
+    return QueryBuilder.apply(this, (query) {
+      if (query.whereSort == Sort.asc) {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'isFavorite',
+              lower: [],
+              upper: [isFavorite],
+              includeUpper: false,
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'isFavorite',
+              lower: [isFavorite],
+              includeLower: false,
+              upper: [],
+            ));
+      } else {
+        return query
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'isFavorite',
+              lower: [isFavorite],
+              includeLower: false,
+              upper: [],
+            ))
+            .addWhereClause(IndexWhereClause.between(
+              indexName: r'isFavorite',
+              lower: [],
+              upper: [isFavorite],
+              includeUpper: false,
+            ));
+      }
     });
   }
 }
@@ -1613,6 +1688,16 @@ extension SongQueryFilter on QueryBuilder<Song, Song, QFilterCondition> {
     });
   }
 
+  QueryBuilder<Song, Song, QAfterFilterCondition> isFavoriteEqualTo(
+      bool value) {
+    return QueryBuilder.apply(this, (query) {
+      return query.addFilterCondition(FilterCondition.equalTo(
+        property: r'isFavorite',
+        value: value,
+      ));
+    });
+  }
+
   QueryBuilder<Song, Song, QAfterFilterCondition> lastPlayedIsNull() {
     return QueryBuilder.apply(this, (query) {
       return query.addFilterCondition(const FilterCondition.isNull(
@@ -1928,6 +2013,18 @@ extension SongQuerySortBy on QueryBuilder<Song, Song, QSortBy> {
     });
   }
 
+  QueryBuilder<Song, Song, QAfterSortBy> sortByIsFavorite() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'isFavorite', Sort.asc);
+    });
+  }
+
+  QueryBuilder<Song, Song, QAfterSortBy> sortByIsFavoriteDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'isFavorite', Sort.desc);
+    });
+  }
+
   QueryBuilder<Song, Song, QAfterSortBy> sortByLastPlayed() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'lastPlayed', Sort.asc);
@@ -2062,6 +2159,18 @@ extension SongQuerySortThenBy on QueryBuilder<Song, Song, QSortThenBy> {
     });
   }
 
+  QueryBuilder<Song, Song, QAfterSortBy> thenByIsFavorite() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'isFavorite', Sort.asc);
+    });
+  }
+
+  QueryBuilder<Song, Song, QAfterSortBy> thenByIsFavoriteDesc() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addSortBy(r'isFavorite', Sort.desc);
+    });
+  }
+
   QueryBuilder<Song, Song, QAfterSortBy> thenByLastPlayed() {
     return QueryBuilder.apply(this, (query) {
       return query.addSortBy(r'lastPlayed', Sort.asc);
@@ -2144,6 +2253,12 @@ extension SongQueryWhereDistinct on QueryBuilder<Song, Song, QDistinct> {
     });
   }
 
+  QueryBuilder<Song, Song, QDistinct> distinctByIsFavorite() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addDistinctBy(r'isFavorite');
+    });
+  }
+
   QueryBuilder<Song, Song, QDistinct> distinctByLastPlayed() {
     return QueryBuilder.apply(this, (query) {
       return query.addDistinctBy(r'lastPlayed');
@@ -2210,6 +2325,12 @@ extension SongQueryProperty on QueryBuilder<Song, Song, QQueryProperty> {
   QueryBuilder<Song, String?, QQueryOperations> genreProperty() {
     return QueryBuilder.apply(this, (query) {
       return query.addPropertyName(r'genre');
+    });
+  }
+
+  QueryBuilder<Song, bool, QQueryOperations> isFavoriteProperty() {
+    return QueryBuilder.apply(this, (query) {
+      return query.addPropertyName(r'isFavorite');
     });
   }
 

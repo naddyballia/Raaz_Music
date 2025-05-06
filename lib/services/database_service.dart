@@ -118,6 +118,75 @@ class DatabaseService {
     }
   }
 
+  // --- Add method to toggle favorite status ---
+  Future<void> toggleFavorite(Song song) async {
+    final isar = await _db;
+    try {
+      await isar.writeTxn(() async {
+        song.isFavorite = !song.isFavorite; // Toggle the status
+        await isar.songs.put(song); // Save the updated song object
+      });
+      print(
+          "[DatabaseService] Toggled favorite for ${song.displayTitle} to ${song.isFavorite}");
+    } catch (e) {
+      print(
+          "[DatabaseService] Error toggling favorite for ${song.displayTitle}: $e");
+    }
+  }
+
+  // --- Add method to get favorite songs ---
+  Future<List<Song>> getFavoriteSongs() async {
+    final isar = await _db;
+    try {
+      // Find songs where isFavorite is true, sort by title
+      final favoriteSongs = await isar.songs
+          .where()
+          .filter()
+          .isFavoriteEqualTo(true)
+          .sortByTitle() // Or sort as desired
+          .findAll();
+      print("[DatabaseService] Loaded ${favoriteSongs.length} favorite songs.");
+      return favoriteSongs;
+    } catch (e) {
+      print("[DatabaseService] Error loading favorite songs: $e");
+      return [];
+    }
+  }
+
+  // --- Add method to delete a song (DB and File) ---
+  Future<bool> deleteSong(Song song) async {
+    final isar = await _db;
+    try {
+      // 1. Delete from Database
+      bool dbDeleted = false;
+      await isar.writeTxn(() async {
+        dbDeleted = await isar.songs.delete(song.id);
+      });
+
+      if (!dbDeleted) {
+        print(
+            "[DatabaseService] Failed to delete song from DB: ${song.displayTitle}");
+        return false; // Stop if DB deletion failed
+      }
+      print("[DatabaseService] Deleted song from DB: ${song.displayTitle}");
+
+      // 2. Delete File from Storage
+      final file = File(song.filePath);
+      if (await file.exists()) {
+        await file.delete();
+        print("[DatabaseService] Deleted song file: ${song.filePath}");
+        return true; // Success
+      } else {
+        print(
+            "[DatabaseService] Song file not found, only removed from DB: ${song.filePath}");
+        return true; // Still consider it a success as DB entry is gone
+      }
+    } catch (e) {
+      print("[DatabaseService] Error deleting song ${song.displayTitle}: $e");
+      return false; // Indicate failure
+    }
+  }
+
   // Optional: Close the database when done (e.g., in dispose or app termination)
   Future<void> close() async {
     if (_isInitialized) {
